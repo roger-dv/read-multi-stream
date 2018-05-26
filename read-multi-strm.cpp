@@ -1,7 +1,22 @@
-//
-// Created by rogerv on 4/21/18.
-//
+/* read-multi-strm.cpp
 
+Copyright 2018 Roger D. Voss
+
+Created by roger-dv on 4/21/18.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+*/
 #include <unistd.h>
 #include <cstring>
 #include "read-multi-strm.h"
@@ -77,13 +92,18 @@ read_multi_stream::~read_multi_stream() {
   fprintf(stderr, "DEBUG: << %p->%s()\n", this, __FUNCTION__);
 }
 
-int read_multi_stream::wait_for_io(std::vector<std::tuple<int, int>> &active_fds) {
+int read_multi_stream::wait_for_io(std::vector<int> &active_fds) {
   int rc = EXIT_SUCCESS;
   fd_set rfd_set{0};
   struct timeval tv{5, 0}; // Wait up to five seconds
 
   FD_ZERO(&rfd_set);
-  FD_SET(this->orig_fd, &rfd_set); // select on the original file descriptor
+  for(auto const & item : this->fds) {
+    auto const &rbc_stdout = std::get<0>(item);
+    auto const &rbc_stderr = std::get<1>(item);
+    FD_SET(rbc_stdout.orig_fd, &rfd_set); // select on the original file descriptor
+    FD_SET(rbc_stderr.orig_fd, &rfd_set); // select on the original file descriptor
+  }
 
   int highest_fd = -1;
   for(int i = 0; i < FD_SETSIZE; i++) {
@@ -107,7 +127,21 @@ int read_multi_stream::wait_for_io(std::vector<std::tuple<int, int>> &active_fds
     }
 
     if (ret_val > 0) {
-      if (FD_ISSET(this->orig_fd, &rfd_set)) {
+      active_fds.clear();
+      bool any_ready = false;
+      for(auto const & item : this->fds) {
+        auto const &rbc_stdout = std::get<0>(item);
+        auto const &rbc_stderr = std::get<1>(item);
+        if (FD_ISSET(rbc_stdout.orig_fd, &rfd_set)) {
+          active_fds.push_back(rbc_stdout.orig_fd);
+          any_ready = true;
+        }
+        if (FD_ISSET(rbc_stderr.orig_fd, &rfd_set)) {
+          active_fds.push_back(rbc_stderr.orig_fd);
+          any_ready = true;
+        }
+      }
+      if (any_ready) {
         fputs("DEBUG: Data is available now:\n", stderr);
       }
     }

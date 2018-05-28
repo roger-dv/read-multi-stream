@@ -23,14 +23,37 @@ limitations under the License.
 #include <sys/types.h>
 #include <tuple>
 #include <vector>
+#include <unordered_map>
 #include "read-buf-ctx.h"
 
 
 u_int const default_read_buf_size = 128;
 u_int const initial_fds_vec_capacity = 16;
 
+struct read_buf_ctx_pair {
+  read_buf_ctx stdout_ctx;
+  read_buf_ctx stderr_ctx;
+  // deletes default constructor and copy constructor
+  read_buf_ctx_pair() = delete;
+  read_buf_ctx_pair(const read_buf_ctx_pair&) = delete;
+  // supports one constructor taking arguments and a default move constructor
+  read_buf_ctx_pair(read_buf_ctx_pair && rbcp_rval) noexcept = default;
+  // this constructor is used for emplace construction into vector
+  read_buf_ctx_pair(int stdout_fd, int stderr_fd, u_int read_buf_size)
+      : stdout_ctx(stdout_fd, read_buf_size), stderr_ctx(stderr_fd, read_buf_size) {}
+  // supports move-only assignment semantics
+  read_buf_ctx_pair & operator=(const read_buf_ctx_pair &) = delete;
+  read_buf_ctx_pair & operator=(read_buf_ctx_pair && rbcp) noexcept {
+    this->stdout_ctx = std::move(rbcp.stdout_ctx);
+    this->stderr_ctx = std::move(rbcp.stderr_ctx);
+    return *this;
+  }
+  ~read_buf_ctx_pair() = default;
+};
+
 class read_multi_stream final {
-  std::vector<std::tuple<read_buf_ctx, read_buf_ctx>> fds;
+  std::vector<read_buf_ctx_pair> fds;
+  std::unordered_map<int, const read_buf_ctx&> fd_map;
   u_int const read_buf_size;
   friend class read_buf_ctx;
   friend void test();
@@ -50,6 +73,9 @@ public:
   }
   ~read_multi_stream();
   int wait_for_io(std::vector<int> &active_fds);
+private:
+  void add_to_fd_map(size_t index, const read_buf_ctx_pair &elem);
+  void verify_added_elem(size_t index, const read_buf_ctx_pair &elem, int stdout_fd, int stderr_fd, u_int read_buf_size);
 };
 
 #endif //READ_MULTI_STRM_H

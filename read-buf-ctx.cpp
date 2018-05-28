@@ -83,7 +83,8 @@ read_buf_ctx::~read_buf_ctx() {
   auto const ofd = ptr != nullptr ? ptr->orig_fd : -1;
   auto const dfd = ptr != nullptr ? ptr->dup_fd  : -1;
   auto const rb = sp_read_buf_rb ? sp_read_buf_rb.get() : nullptr;
-  fprintf(stderr, "DEBUG: << %p->%s(), orig_fd: %d, dup_fd: %d, read_buffer: %p\n", this, __FUNCTION__, ofd, dfd, rb);
+  fprintf(stderr, "DEBUG: << (%p)->%s(): orig_fd: %03d, dup_fd: %03d, read_buffer: %p\n",
+          this, __FUNCTION__, ofd, dfd, rb);
 }
 
 /**

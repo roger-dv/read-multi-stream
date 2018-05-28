@@ -53,7 +53,7 @@ struct read_buf_ctx_pair {
 
 class read_multi_stream final {
   std::vector<read_buf_ctx_pair> fds;
-  std::unordered_map<int, const read_buf_ctx&> fd_map;
+  std::unordered_map<int, std::tuple<size_t, const read_buf_ctx*>> fd_map;
   u_int const read_buf_size;
   friend class read_buf_ctx;
   friend void test();

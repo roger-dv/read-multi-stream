@@ -32,8 +32,22 @@ read_multi_stream::read_multi_stream(u_int const read_buf_size) : read_buf_size(
 }
 
 void read_multi_stream::add_to_fd_map(size_t index, const read_buf_ctx_pair &elem) {
-  fd_map.insert({elem.stdout_ctx.orig_fd, elem.stdout_ctx});
-  fd_map.insert({elem.stderr_ctx.orig_fd, elem.stderr_ctx});
+  fd_map.insert({elem.stdout_ctx.orig_fd, std::make_tuple(index, &elem.stdout_ctx)});
+  fd_map.insert({elem.stderr_ctx.orig_fd, std::make_tuple(index, &elem.stderr_ctx)});
+#if DBG_VERIFY
+  auto stdout_ctx_item = fd_map[elem.stdout_ctx.orig_fd];
+  auto stderr_ctx_item = fd_map[elem.stderr_ctx.orig_fd];
+  auto const stdout_ctx_idx = std::get<0>(stdout_ctx_item);
+  auto stdout_ctx_elem = std::get<1>(stdout_ctx_item);
+  auto const stderr_ctx_idx = std::get<0>(stderr_ctx_item);
+  auto stderr_ctx_elem = std::get<1>(stderr_ctx_item);
+  assert(stdout_ctx_idx == index);
+  assert(stderr_ctx_idx == index);
+  assert(stdout_ctx_elem->orig_fd == elem.stdout_ctx.orig_fd);
+  assert(stderr_ctx_elem->orig_fd == elem.stderr_ctx.orig_fd);
+  assert(stdout_ctx_elem->orig_fd == fds[stdout_ctx_idx].stdout_ctx.orig_fd);
+  assert(stderr_ctx_elem->orig_fd == fds[stderr_ctx_idx].stderr_ctx.orig_fd);
+#endif
 }
 
 void read_multi_stream::verify_added_elem(size_t index, const read_buf_ctx_pair &elem,

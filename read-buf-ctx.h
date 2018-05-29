@@ -35,6 +35,7 @@ private:
   const u_int read_buf_limit;
   u_int pos = 0;
   bool eof_flag = false;
+  bool is_stderr_flag = false;
   friend void test();
   friend class read_multi_stream;
 public:
@@ -47,7 +48,8 @@ public:
   }
   read_buf_ctx& operator=(read_buf_ctx &&rbc) noexcept;
   ~read_buf_ctx();
-  bool is_valid_init() { return orig_fd >= 0 && dup_fd != -1; }
+  bool is_valid_init() const { return orig_fd >= 0 && dup_fd != -1; }
+  bool is_stderr_stream() const { return is_stderr_flag; }
   int read_line_on_ready(std::string &output_strbuf);
 private:
   bool find_next_eol(char *pLF, const char *end, std::string &output_strbuf);

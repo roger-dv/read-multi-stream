@@ -20,18 +20,21 @@ limitations under the License.
 #include <cstring>
 #include <unistd.h>
 #include <cxxabi.h>
+#include <cassert>
+#include <set>
 #include "signal-handling.h"
 #include "util.h"
 #include "uncompress-stream.h"
 #include "read-multi-strm.h"
 
-static void do_on_exit();
+static std::tuple<int, const char*> write_to_output_stream(read_buf_ctx &rbc, FILE* output_stream);
+//static void do_on_exit();
 
 int main(int argc, char **argv) {
   try {
     signal_handling::set_signals_handler();
 
-    atexit(do_on_exit);
+//    atexit(do_on_exit);
 
     u_int read_buf_size = 64; // default
 
@@ -41,19 +44,6 @@ int main(int argc, char **argv) {
       return EXIT_FAILURE;
     }
     dbg_dump_file_desc_flags(stdin_fd);
-
-    struct {
-      int fd;
-    } input_src{stdin_fd}; // default input stream
-    using fd_t = decltype(input_src);
-    auto const cleanup_src_input = [stdin_fd](fd_t *p) {
-      if (p != nullptr && p->fd != stdin_fd && p->fd > 2) {
-        close(p->fd);
-        p->fd = -1;
-      }
-    };
-    using fd_close_t = decltype(cleanup_src_input);
-    std::unique_ptr<fd_t, fd_close_t> sp_input_src(&input_src, cleanup_src_input);
 
     read_multi_stream rms;
 
@@ -95,10 +85,6 @@ int main(int argc, char **argv) {
                 auto const fd_stdout = std::get<0>(fd_pair);
                 auto const fd_stderr = std::get<1>(fd_pair);
                 if (fd_stdout != -1) {
-                  sp_input_src.reset(nullptr);
-                  input_src.fd = fd_stdout;
-                  sp_input_src.reset(&input_src);
-
                   rms += std::make_tuple(fd_stdout, fd_stderr);
                   continue;
                 }
@@ -112,33 +98,66 @@ int main(int argc, char **argv) {
 
     fprintf(stderr, "DEBUG: using %u bytes as read buffer size\n", read_buf_size);
 
-    // TODO: for debug diagnostics - can comment out when done with its use
-    if (dbg_echo_input_source(sp_input_src->fd, __LINE__)) {
-      return EXIT_SUCCESS;
+    std::set<FILE*> fps{stdout, stderr};
+    bool is_ctrl_z_registered = false;
+    std::vector<int> fds{};
+    const char* msg = "failure";
+    int rc;
+    while((rc = rms.wait_for_io(fds)) == 0 && fps.size() > 0) {
+      for(auto const fd : fds) {
+        auto &rbc = rms.get_read_buf_ctx(fd);
+        if (rbc.is_valid_init()) {
+          if (!is_ctrl_z_registered) {
+            const auto curr_thrd = pthread_self();
+            signal_handling::register_ctrl_z_handler([curr_thrd](int sig) {
+//            fprintf(stderr, "DEBUG: << %s(sig: %d)\n", "signal_interrupt_thread", sig);
+              pthread_kill(curr_thrd, sig);
+            });
+            is_ctrl_z_registered = true;
+          }
+          auto const output_stream = rbc.is_stderr_stream() ? stderr : stdout;
+          fps.erase(output_stream);
+          auto rtn = write_to_output_stream(rbc, output_stream);
+          rc = std::get<0>(rtn);
+          msg = std::get<1>(rtn);
+        } else {
+          fputs("ERROR: initialization failure of read_buf_ctx object", stderr);
+          rc = EXIT_FAILURE;
+          break;
+        }
+      }
     }
+    fprintf(stderr, "INFO: program exiting with status: [%d] %s\n", rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE, msg);
+  } catch(...) {
+    const auto ex_nm = get_unmangled_name(abi::__cxa_current_exception_type()->name());
+    fprintf(stderr, "process %d terminating due to unhandled exception of type %s", getpid(), ex_nm.c_str());
+    return EXIT_FAILURE;
+  }
+  return EXIT_SUCCESS;
+}
 
-    read_buf_ctx rbc(sp_input_src->fd, read_buf_size);
-    if (rbc.is_valid_init()) {
-      const auto curr_thrd = pthread_self();
-      signal_handling::register_ctrl_z_handler([curr_thrd](int sig){
-//        fprintf(stderr, "DEBUG: << %s(sig: %d)\n", "signal_interrupt_thread", sig);
-        pthread_kill(curr_thrd, sig);
-      });
-    } else {
-      fputs("ERROR: failed to construct/initialize read_buf_ctx object", stderr);
-      return EXIT_FAILURE;
+static std::tuple<int, const char*> write_to_output_stream(read_buf_ctx &rbc, FILE * const output_stream) {
+  const char* msg = "";
+  std::string str_buf;
+  str_buf.reserve(16);
+
+  auto const check_output_io = [&msg](int rc) -> bool {
+    if (rc == -1) {
+      fprintf(stderr,"ERROR: failed writing to output stream: [%d] %s\n", rc, strerror(errno));
+      msg = "failure";
+      return false;
     }
-    std::string str_buf;
-    str_buf.reserve(16);
+    return true;
+  };
 
-    for(int i = 1; !signal_handling::interrupted(); i++) {
-      fprintf(stderr, "DEBUG: string buffer capacity: %lu, string length: %lu\nDEBUG: read line (%03d) of input:\n",
-             str_buf.capacity(), str_buf.length(), i);
-      str_buf.clear();
-      auto rc = rbc.read_line_on_ready(str_buf);
-      if (rc != EXIT_SUCCESS || strcasecmp(str_buf.c_str(), "quit") == 0) {
-        const char *msg;
-        switch(rc) {
+  int rc = 0, rc2 = 0;
+  for(long input_line = 1; !signal_handling::interrupted(); input_line++) {
+    fprintf(stderr, "DEBUG: string buffer capacity: %lu, string length: %lu\nDEBUG: read line (%05lu) of input:\n",
+            str_buf.capacity(), str_buf.length(), input_line);
+    str_buf.clear();
+    rc = rbc.read_line_on_ready(str_buf);
+    if (rc != EXIT_SUCCESS || strcasecmp(str_buf.c_str(), "quit") == 0) {
+      switch(rc) {
         case EXIT_SUCCESS:
           msg = "successful";
           break;
@@ -154,26 +173,36 @@ int main(int argc, char **argv) {
           break;
         default:
           msg = "";
-        }
-        if (!str_buf.empty()) {
-          puts(str_buf.c_str());
-        }
-        fprintf(stderr, "INFO: program exiting with status: [%d] %s\n", rc, msg);
-        return rc == EXIT_SUCCESS || rc == EOF ? EXIT_SUCCESS : EXIT_FAILURE;
       }
-      puts(str_buf.c_str());
+      if (!str_buf.empty()) {
+        rc2 = fputs(str_buf.c_str(), output_stream);
+        if (check_output_io(rc2)) {
+          rc2 = fputc('\n', output_stream);
+          if (check_output_io(rc2)) {
+            rc2 = fflush(output_stream);
+          }
+        }
+      }
+      rc = (rc == EXIT_SUCCESS || rc == EOF) && rc2 != -1 ? EXIT_SUCCESS : EXIT_FAILURE;
+      return std::make_tuple(rc, msg);
     }
-    fputs("DEBUG: program out of read-line input loop due to interrupt signal\n", stderr);
-  } catch(...) {
-    const auto ex_nm = get_unmangled_name(abi::__cxa_current_exception_type()->name());
-    fprintf(stderr, "process %d terminating due to unhandled exception of type %s", getpid(), ex_nm.c_str());
-    return EXIT_FAILURE;
+    rc = fputs(str_buf.c_str(), output_stream);
+    if (check_output_io(rc)) {
+      rc = fputc('\n', output_stream);
+      check_output_io(rc);
+    }
+    if (rc == -1) return std::make_tuple(EXIT_FAILURE, msg);
   }
-  return EXIT_SUCCESS;
+  rc = fflush(output_stream);
+  check_output_io(rc);
+  fputs("DEBUG: breaking out of read-line input loop due to interrupt signal\n", stderr);
+  return std::make_tuple(rc != -1 ? EXIT_SUCCESS : EXIT_FAILURE, msg);
 }
 
+/*
 static void do_on_exit() {
   extern void test();
   test();
   fputs("DEBUG: call to test completed\n", stderr);
 }
+*/

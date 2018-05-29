@@ -28,10 +28,10 @@ limitations under the License.
 read_multi_stream::read_multi_stream(u_int const read_buf_size) : read_buf_size(read_buf_size) {
   fds.reserve(initial_fds_vec_capacity);
 
-  fprintf(stderr, "DEBUG: read_buf_size: %ul\n", read_buf_size);
+  fprintf(stderr, "DEBUG: read_buf_size: %u\n", read_buf_size);
 }
 
-void read_multi_stream::add_to_fd_map(size_t index, const read_buf_ctx_pair &elem) {
+void read_multi_stream::add_to_fd_map(size_t index, read_buf_ctx_pair &elem) {
   fd_map.insert({elem.stdout_ctx.orig_fd, std::make_tuple(index, &elem.stdout_ctx)});
   fd_map.insert({elem.stderr_ctx.orig_fd, std::make_tuple(index, &elem.stderr_ctx)});
 #if DBG_VERIFY
@@ -72,7 +72,8 @@ read_multi_stream::read_multi_stream(int const stdout_fd, int const stderr_fd, u
   fds.reserve(initial_fds_vec_capacity);
   fds.emplace_back(stdout_fd, stderr_fd, read_buf_size);
   auto const index = fds.size() - 1;
-  auto const &elem = fds.back();
+  auto &elem = fds.back();
+  elem.stderr_ctx.is_stderr_flag = true;
   add_to_fd_map(index, elem);
 #if DBG_VERIFY
   verify_added_elem(index, elem, stdout_fd, stderr_fd, read_buf_size);
@@ -87,7 +88,8 @@ read_multi_stream::read_multi_stream(std::tuple<int, int> fd_pair, u_int const r
   int const stderr_fd = std::get<1>(fd_pair);
   fds.emplace_back(stdout_fd, stderr_fd, read_buf_size);
   auto const index = fds.size() - 1;
-  auto const &elem = fds.back();
+  auto &elem = fds.back();
+  elem.stderr_ctx.is_stderr_flag = true;
   add_to_fd_map(index, elem);
 #if DBG_VERIFY
   verify_added_elem(index, elem, stdout_fd, stderr_fd, read_buf_size);
@@ -106,7 +108,8 @@ read_multi_stream::read_multi_stream(std::initializer_list<std::tuple<int, int>>
 
     fds.emplace_back(stdout_fd, stderr_fd, read_buf_size);
     auto const index = fds.size() - 1;
-    auto const &elem = fds.back();
+    auto &elem = fds.back();
+    elem.stderr_ctx.is_stderr_flag = true;
     add_to_fd_map(index, elem);
 #if DBG_VERIFY
     verify_added_elem(index, elem, stdout_fd, stderr_fd, read_buf_size);
@@ -123,7 +126,8 @@ read_multi_stream& read_multi_stream::operator +=(std::tuple<int, int> fd_pair) 
 
   fds.emplace_back(stdout_fd, stderr_fd, read_buf_size);
   auto const index = fds.size() - 1;
-  auto const &elem = fds.back();
+  auto &elem = fds.back();
+  elem.stderr_ctx.is_stderr_flag = true;
   add_to_fd_map(index, elem);
 #if DBG_VERIFY
   verify_added_elem(index, elem, stdout_fd, stderr_fd, read_buf_size);
@@ -137,7 +141,7 @@ read_multi_stream::~read_multi_stream() {
 }
 
 int read_multi_stream::wait_for_io(std::vector<int> &active_fds) {
-  int rc = EXIT_SUCCESS;
+  int rc = 0;
   fd_set rfd_set{0};
   struct timeval tv{5, 0}; // Wait up to five seconds
 
@@ -167,7 +171,7 @@ int read_multi_stream::wait_for_io(std::vector<int> &active_fds) {
         return ec; // signal for exiting condition detected so bail out immediately
       }
       fprintf(stderr, "ERROR: %d: %s() -> select(): %s\n", line_nbr, __FUNCTION__, strerror(ec));
-      return EXIT_FAILURE;
+      return -1;
     }
 
     if (ret_val > 0) {
@@ -187,6 +191,7 @@ int read_multi_stream::wait_for_io(std::vector<int> &active_fds) {
       }
       if (any_ready) {
         fputs("DEBUG: Data is available now:\n", stderr);
+        break;
       }
     }
   }

@@ -53,7 +53,7 @@ struct read_buf_ctx_pair {
 
 class read_multi_stream final {
   std::vector<read_buf_ctx_pair> fds;
-  std::unordered_map<int, std::tuple<size_t, const read_buf_ctx*>> fd_map;
+  std::unordered_map<int, std::tuple<size_t, read_buf_ctx*>> fd_map;
   u_int const read_buf_size;
   friend class read_buf_ctx;
   friend void test();
@@ -73,8 +73,15 @@ public:
   }
   ~read_multi_stream();
   int wait_for_io(std::vector<int> &active_fds);
+  size_t size() const { return fds.size(); }
+  read_buf_ctx& get_read_buf_ctx(int fd) const {
+    auto entry = fd_map.at(fd);
+    auto p_entry = std::get<1>(entry);
+    assert(p_entry != nullptr);
+    return *p_entry;
+  }
 private:
-  void add_to_fd_map(size_t index, const read_buf_ctx_pair &elem);
+  void add_to_fd_map(size_t index, read_buf_ctx_pair &elem);
   void verify_added_elem(size_t index, const read_buf_ctx_pair &elem, int stdout_fd, int stderr_fd, u_int read_buf_size);
 };
 

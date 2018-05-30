@@ -112,15 +112,7 @@ read_buf_ctx::~read_buf_ctx() {
  */
 int read_buf_ctx::read_line_on_ready(std::string &output_strbuf) {
   if (this->eof_flag) {
-    bool eol = false;
-    if (this->pos > 0) {
-      // insure any content in the read buffer gets appended to the string buffer
-      const char * const end = this->read_buffer + this->pos;
-      char * const pLF = this->read_buffer;
-      assert(pLF < end);
-      eol = find_next_eol(pLF, end, output_strbuf);
-    }
-    return eol && this->pos > 0 ? EXIT_SUCCESS : EOF;
+    return handle_eof_slop(output_strbuf);
   }
 
   int rc = EXIT_SUCCESS;
@@ -153,35 +145,7 @@ int read_buf_ctx::read_line_on_ready(std::string &output_strbuf) {
     if (ret_val > 0) {
       if (FD_ISSET(this->orig_fd, &rfd_set)) {
         fputs("DEBUG: Data is available now:\n", stderr);
-        bool had_data; // flag which indicates whether to keep reading input
-        bool eol = false;
-        do {
-          char * const rd_buf_base =  this->read_buffer + this->pos;
-          const auto rd_buf_size = this->read_buf_limit - this->pos;
-          const auto n = read(this->dup_fd, rd_buf_base, rd_buf_size);
-          had_data = n > 0;
-          if (had_data) {
-            char *const end = &rd_buf_base[n];
-            *end = '\0';  /* null terminate the read buffer contents to be a valid C string   */
-                          /* (the buffer is sized to allow for a terminating null character)  */
-//            fprintf(stderr, "TRACE1: %p %03lu '%s'\n", (void *) rd_buf_base, n, rd_buf_base);
-            char * const pLF = this->read_buffer;
-            assert(pLF < end);
-            eol = find_next_eol(pLF, end, output_strbuf);
-          } else if (n == 0) { // indicates end-of-file condition was encountered by read() call
-            fprintf(stderr, "DEBUG: %d %s() -> eof reached\n", __LINE__, __FILE__);
-            rd_buf_base[n] = '\0'; // insure is null terminated to a valid C string
-            this->eof_flag = true;
-            if (this->pos > 0) {
-              // insure any content in the read buffer gets appended to the string buffer
-              const char * const end = rd_buf_base;
-              char * const pLF = this->read_buffer;
-              assert(pLF < end);
-              eol = find_next_eol(pLF, end, output_strbuf);
-            }
-            rc = eol && this->pos > 0 ? EXIT_SUCCESS : EOF;
-          }
-        } while(had_data && !eol);
+        read_line_core(output_strbuf, rc);
       }
       break;
     }
@@ -195,6 +159,30 @@ int read_buf_ctx::read_line_on_ready(std::string &output_strbuf) {
   }
 
   return signal_handling::interrupted() ? EINTR : rc; // the dup file descriptor is closed by smart pointer
+}
+
+int read_buf_ctx::read_line(std::string &output_strbuf) {
+  if (this->eof_flag) {
+    return handle_eof_slop(output_strbuf);
+  }
+
+  int rc = EXIT_SUCCESS;
+
+  read_line_core(output_strbuf, rc);
+
+  return signal_handling::interrupted() ? EINTR : rc; // the dup file descriptor is closed by smart pointer
+}
+
+int read_buf_ctx::handle_eof_slop(std::string &output_strbuf) {
+  bool eol = false;
+  if (this->pos > 0) {
+      // insure any content in the read buffer gets appended to the string buffer
+      const char * const end = this->read_buffer + this->pos;
+      char * const pLF = this->read_buffer;
+      assert(pLF < end);
+      eol = find_next_eol(pLF, end, output_strbuf);
+    }
+  return eol && this->pos > 0 ? EXIT_SUCCESS : EOF;
 }
 
 bool read_buf_ctx::find_next_eol(char *pLF, const char * const end, std::string &output_strbuf) {
@@ -234,4 +222,36 @@ bool read_buf_ctx::find_next_eol(char *pLF, const char * const end, std::string 
   }
 
   return eol;
+}
+
+void read_buf_ctx::read_line_core(std::string &output_strbuf, int &rc) {
+  bool had_data; // flag which indicates whether to keep reading input
+  bool eol = false;
+  do {
+    char * const rd_buf_base =  this->read_buffer + this->pos;
+    const auto rd_buf_size = this->read_buf_limit - this->pos;
+    const auto n = read(this->dup_fd, rd_buf_base, rd_buf_size);
+    had_data = n > 0;
+    if (had_data) {
+      char *const end = &rd_buf_base[n];
+      *end = '\0';  /* null terminate the read buffer contents to be a valid C string   */
+      /* (the buffer is sized to allow for a terminating null character)  */
+//      fprintf(stderr, "TRACE1: %p %03lu '%s'\n", (void *) rd_buf_base, n, rd_buf_base);
+      char * const pLF = this->read_buffer;
+      assert(pLF < end);
+      eol = find_next_eol(pLF, end, output_strbuf);
+    } else if (n == 0) { // indicates end-of-file condition was encountered by read() call
+      fprintf(stderr, "DEBUG: %d %s() -> eof reached\n", __LINE__, __FUNCTION__);
+      rd_buf_base[n] = '\0'; // insure is null terminated to a valid C string
+      this->eof_flag = true;
+      if (this->pos > 0) {
+        // insure any content in the read buffer gets appended to the string buffer
+        const char * const end = rd_buf_base;
+        char * const pLF = this->read_buffer;
+        assert(pLF < end);
+        eol = find_next_eol(pLF, end, output_strbuf);
+      }
+      rc = eol && this->pos > 0 ? EXIT_SUCCESS : EOF;
+    }
+  } while(had_data && !eol);
 }

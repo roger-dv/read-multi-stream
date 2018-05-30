@@ -51,8 +51,11 @@ public:
   bool is_valid_init() const { return orig_fd >= 0 && dup_fd != -1; }
   bool is_stderr_stream() const { return is_stderr_flag; }
   int read_line_on_ready(std::string &output_strbuf);
+  int read_line(std::string &output_strbuf);
 private:
+  int handle_eof_slop(std::string &output_strbuf);
   bool find_next_eol(char *pLF, const char *end, std::string &output_strbuf);
+  void read_line_core(std::string &output_strbuf, int &rc);
   friend void close_dup_fd(fd_t *p);
   using fd_close_dup_t = std::function<void(fd_t *)>;
   std::unique_ptr<fd_t, fd_close_dup_t> sp_input_fd;

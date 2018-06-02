@@ -45,10 +45,12 @@ bool valid_file(const char * filepath) {
   return true;
 }
 
-bool has_ending(const std::string full_str, const std::string ending, int line_nbr) {
+bool has_ending(const std::string &full_str, const std::string &ending, int &offset, int line_nbr) {
+  offset = -1;
   bool rslt = false;
   if (full_str.length() >= ending.length()) {
-    rslt = (0 == full_str.compare (full_str.length() - ending.length(), ending.length(), ending));
+    offset = static_cast<int>(full_str.length() - ending.length());
+    rslt = (0 == full_str.compare(static_cast<unsigned long>(offset), ending.length(), ending));
   }
   if (!rslt) {
     fprintf(stderr, "ERROR: %d: %s() -> \"%s\" is not a %s compressed file\n",

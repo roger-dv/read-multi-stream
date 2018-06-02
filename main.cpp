@@ -204,7 +204,7 @@ int main(int argc, char **argv) {
             fputs("WARN: a ready-to-read file descriptor failed to dereference an output context - skipping\n", stderr);
             continue;
           }
-          auto const &sp_output_ctx = search->second;
+          auto const sp_output_ctx = search->second;
           futures.emplace_back(
               std::async(
                   [fd, &rbc, sp_output_ctx] {

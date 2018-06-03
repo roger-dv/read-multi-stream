@@ -28,56 +28,58 @@ limitations under the License.
 #include "uncompress-stream.h"
 #include "read-multi-strm.h"
 
-using write_result = std::tuple<int, int, std::string>;
-
-static write_result
-write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *output_stream, long &input_line, std::string &str_buf);
 
 //static void do_on_exit();
 
 using file_stream_unique_ptr = std::unique_ptr<FILE, std::function<decltype(fclose)>>;
 
 /**
- * Data structure that holds context for output files associated
- * to a given input file. A given input file will decompress into
- * a corresponding output file (of the same name but minus ".gz"
- * suffix), and there will be a file of the same name with a ".err"
- * suffix for recording any errors encountered in processing that
- * input file.
+ * Data structure that holds context for an output stream associated
+ * to a given input stream. A given input file will gzip decompress
+ * into a corresponding output file stream (of the same name but minus
+ * ".gz" suffix), and there will be a file of the same name with a
+ * ".err" suffix for recording any errors encountered in processing
+ * that input file.
  *
- * FILE stream pointers are established per each of these output
- * files; they are wrapped with unique smart pointers to where they
- * will be properly closed when this context object instance is
- * destructed.
+ * A C FILE stream is established per each of these output files. The
+ * context data structure here is instantiated to track the read-access
+ * consumption of one of these output streams (one is instantiated per
+ * each of the two output file streams).
+ *
+ * A FILE stream pointer is wrapped with a unique smart pointer so that
+ * it will be properly closed when an instance of this context object
+ * is destructed. (The fclose() function will close the FILE stream.)
  */
-struct output_streams {
+struct output_stream_context {
   const std::string output_file;
-  const std::string output_err_file;
   file_stream_unique_ptr output_stream;
-  file_stream_unique_ptr output_err_stream;
-  std::string output_str_buf{};
-  std::string output_err_str_buf{};
   long output_stream_line{0};
-  long output_err_stream_line{0};
+  std::string output_str_buf{};
 
   // the only valid way to construct this object
-  output_streams(std::basic_string<char> &&output_file_param,
-                 std::basic_string<char> &&output_err_file_param,
-                 file_stream_unique_ptr  &&output_stream_param,
-                 file_stream_unique_ptr  &&output_err_stream_param) :
-      output_file(std::move(output_file_param)), output_err_file(std::move(output_err_file_param)),
-      output_stream(std::move(output_stream_param)), output_err_stream(std::move(output_err_stream_param))
+  output_stream_context(std::string &&output_file_param, file_stream_unique_ptr &&output_stream_param) noexcept :
+      output_file(std::move(output_file_param)),
+      output_stream(std::move(output_stream_param))
   {
     output_str_buf.reserve(16);
-    output_err_str_buf.reserve(16);
   }
-  output_streams() = delete;
-  output_streams(const output_streams &&) = delete;
-  output_streams& operator =(const output_streams &&) = delete;
-  output_streams(const output_streams &) = delete;
-  output_streams& operator =(const output_streams &) = delete;
-  ~output_streams() = default;
+  output_stream_context() = delete;
+  output_stream_context(output_stream_context &&) = delete;
+  output_stream_context &operator=(const output_stream_context &&) = delete;
+  output_stream_context(const output_stream_context &) = delete;
+  output_stream_context &operator=(const output_stream_context &) = delete;
+  ~output_stream_context() = default;
 };
+
+using read_multi_result = std::tuple<int, std::string>;
+
+static read_multi_result read_on_ready(bool &is_ctrl_z_registered, read_multi_stream &rms,
+                                       std::map<int, std::shared_ptr<output_stream_context>> &output_streams_map);
+
+using write_result = std::tuple<int, int, std::string>;
+
+static write_result
+write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *output_stream, long &input_line, std::string &str_buf);
 
 
 int main(int argc, char **argv) {
@@ -102,7 +104,7 @@ int main(int argc, char **argv) {
     // a given input file are used as keys to this map. The map can be
     // dereferenced via a file descriptor (when it is ready to be read)
     // and the output files context retrieved
-    std::map<int, std::shared_ptr<output_streams>> output_streams_map;
+    std::map<int, std::shared_ptr<output_stream_context>> output_streams_map;
 
     if (argc > 1) {
       for(int i = 1; i < argc; i++) {
@@ -166,12 +168,14 @@ int main(int argc, char **argv) {
                   }
                   file_stream_unique_ptr sp_output_err_stream{output_err_stream, &fclose};
 
-                  auto sp_shared_item = std::make_shared<output_streams>(std::move(output_file),
-                                                                         std::move(output_err_file),
-                                                                         std::move(sp_output_stream),
-                                                                         std::move(sp_output_err_stream));
-                  output_streams_map.insert(std::make_pair(fd_stdout, sp_shared_item));
-                  output_streams_map.insert(std::make_pair(fd_stderr, sp_shared_item));
+                  output_streams_map.insert(
+                      std::make_pair(fd_stdout,
+                                     std::make_shared<output_stream_context>(std::move(output_file),
+                                                                             std::move(sp_output_stream))));
+                  output_streams_map.insert(
+                      std::make_pair(fd_stderr,
+                                     std::make_shared<output_stream_context>(std::move(output_err_file),
+                                                                             std::move(sp_output_err_stream))));
 
                   continue;
                 }
@@ -186,67 +190,11 @@ int main(int argc, char **argv) {
     fprintf(stderr, "DEBUG: using %u bytes as read buffer size\n", read_buf_size);
 
     bool is_ctrl_z_registered = false;
-    std::vector<int> fds{};
-    std::vector<std::future<write_result>> futures{};
-    std::string msg{"failure"};
-    int rc;
 
-    while ((rc = rms.wait_for_io(fds)) == 0 && !output_streams_map.empty() && !signal_handling::interrupted()) {
-      futures.clear();
-      for(auto const fd : fds) {
-        auto &rbc = rms.get_read_buf_ctx(fd);
-        if (rbc.is_valid_init()) {
-          if (!is_ctrl_z_registered) {
-            const auto curr_thrd = pthread_self();
-            signal_handling::register_ctrl_z_handler([curr_thrd](int sig) {
-//            fprintf(stderr, "DEBUG: << %s(sig: %d)\n", "signal_interrupt_thread", sig);
-              pthread_kill(curr_thrd, sig);
-            });
-            is_ctrl_z_registered = true;
-          }
-          auto search = output_streams_map.find(fd);
-          if (search == output_streams_map.end()) {
-            fputs("WARN: a ready-to-read file descriptor failed to dereference an output context - skipping\n", stderr);
-            /* TODO: arriving here is due to an eof stream not having been
-             * removed from read_multi_stream (see other TO-DO comment below)
-             */
-            continue;
-          }
-          auto const sp_output_ctx = search->second;
-          futures.emplace_back(
-              std::async(std::launch::async,
-                         [fd, &rbc, sp_output_ctx] {
-                           auto const output_stream = rbc.is_stderr_stream() ? sp_output_ctx->output_err_stream.get()
-                                                                             : sp_output_ctx->output_stream.get();
-                           std::string &str_buf = rbc.is_stderr_stream() ? sp_output_ctx->output_str_buf
-                                                                         : sp_output_ctx->output_err_str_buf;
-                           long &input_line = rbc.is_stderr_stream() ? sp_output_ctx->output_err_stream_line
-                                                                     : sp_output_ctx->output_stream_line;
-                           return write_to_output_stream(fd, rbc, output_stream, input_line, str_buf);
-                         }));
-        } else {
-          fputs("ERROR: initialization failure of read_buf_ctx object", stderr);
-          rc = EXIT_FAILURE;
-          goto check_any_futures;
-        }
-      }
-      // obtain results from all the async futures
-      check_any_futures:
-      for(auto &fut : futures) {
-        auto rtn = fut.get();
-        auto fd = std::get<0>(rtn);
-        rc = std::get<1>(rtn);
-        if (rc != EXIT_SUCCESS) {
-          msg = std::move(std::get<2>(rtn));
-          // removed dereference key for output context per this file descriptor
-          output_streams_map.erase(fd);
-          /* TODO: need to remove from read_multi_stream too, but need to change
-           * its implementation to where uses a map and shared pointer to context
-           * data structure instead of a vector to retain them in
-          */
-        }
-      }
-    }
+    auto rslt = read_on_ready(is_ctrl_z_registered, rms, output_streams_map);
+    auto const rc = std::get<0>(rslt);
+    auto const msg = std::move(std::get<1>(rslt));
+
     fprintf(stderr, "INFO: program exiting with status: [%d] %s\n", rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE, msg.c_str());
   } catch(...) {
     const auto ex_nm = get_unmangled_name(abi::__cxa_current_exception_type()->name());
@@ -254,6 +202,75 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
   return EXIT_SUCCESS;
+}
+
+static read_multi_result read_on_ready(bool &is_ctrl_z_registered, read_multi_stream &rms,
+                                       std::map<int, std::shared_ptr<output_stream_context>> &output_streams_map)
+{
+  std::vector<int> fds{};
+  std::vector<std::future<write_result>> futures{};
+  std::string msg{"failure"};
+  int rc;
+
+  while (rms.size() > 0 && !signal_handling::interrupted() && (rc = rms.wait_for_io(fds)) == 0) {
+    futures.clear();
+    for(auto const fd : fds) {
+      auto const prbc = rms.get_mutable_read_buf_ctx(fd);
+      assert(prbc != nullptr); // lookup should never derefence to a null pointer
+      if (prbc == nullptr) continue;
+      if (prbc->is_valid_init()) {
+        if (!is_ctrl_z_registered) { // a one-time-only initialization
+          const auto curr_thrd = pthread_self();
+          signal_handling::register_ctrl_z_handler([curr_thrd](int sig) {
+//            fprintf(stderr, "DEBUG: << %s(sig: %d)\n", "signal_interrupt_thread", sig);
+            pthread_kill(curr_thrd, sig);
+          });
+          is_ctrl_z_registered = true;
+        }
+        auto search = output_streams_map.find(fd); // look up the file descriptor to find its output stream context
+        if (search == output_streams_map.end()) {
+          fputs("WARN: a ready-to-read file descriptor failed to dereference an output context - skipping\n", stderr);
+          continue;
+        }
+        auto output_stream_ctx = search->second;
+        // invoke the write to the output stream context in an asynchronous manner, using a future to get the outcome
+        futures.emplace_back(
+            std::async(std::launch::async,
+                       [fd, prbc, output_stream_ctx] {
+                         auto const output_stream = output_stream_ctx->output_stream.get();
+                         auto &input_line = output_stream_ctx->output_stream_line;
+                         auto &str_buf = output_stream_ctx->output_str_buf;
+                         return write_to_output_stream(fd, *prbc, output_stream, input_line, str_buf);
+                       }));
+      } else {
+        // A failed initialization detected for the read_buf_ctx (the input source), so remove
+        // dereference key for the input and output stream context items per this file descriptor
+        rms.remove(fd); // input context
+        output_streams_map.erase(fd); // output context
+        fputs("ERROR: initialization failure of read_buf_ctx object", stderr);
+        rc = EXIT_FAILURE;
+        break;
+      }
+    }
+    // obtain results from all the async futures
+    for(auto &fut : futures) {
+      auto rtn = fut.get();
+      auto const fd  = std::get<0>(rtn);
+      auto const rc2 = std::get<1>(rtn);
+      if (rc2 != EXIT_SUCCESS) {
+        rc = rc2;
+        msg = std::move(std::get<2>(rtn));
+        // removed dereference key for output context per this file descriptor
+        rms.remove(fd);
+        output_streams_map.erase(fd);
+      }
+    }
+  }
+
+  if (rc == EXIT_SUCCESS) {
+    msg = "success";
+  }
+  return std::make_tuple(rc, std::move(msg));
 }
 
 static write_result

@@ -26,35 +26,29 @@ limitations under the License.
 #define DBG_VERIFY 1
 
 read_multi_stream::read_multi_stream(u_int const read_buf_size) : read_buf_size(read_buf_size) {
-  fds.reserve(initial_fds_vec_capacity);
-
   fprintf(stderr, "DEBUG: read_buf_size: %u\n", read_buf_size);
 }
 
-void read_multi_stream::add_to_fd_map(size_t index, read_buf_ctx_pair &elem) {
-  fd_map.insert({elem.stdout_ctx.orig_fd, std::make_tuple(index, &elem.stdout_ctx)});
-  fd_map.insert({elem.stderr_ctx.orig_fd, std::make_tuple(index, &elem.stderr_ctx)});
-#if DBG_VERIFY
-  auto stdout_ctx_item = fd_map[elem.stdout_ctx.orig_fd];
-  auto stderr_ctx_item = fd_map[elem.stderr_ctx.orig_fd];
-  auto const stdout_ctx_idx = std::get<0>(stdout_ctx_item);
-  auto stdout_ctx_elem = std::get<1>(stdout_ctx_item);
-  auto const stderr_ctx_idx = std::get<0>(stderr_ctx_item);
-  auto stderr_ctx_elem = std::get<1>(stderr_ctx_item);
-  assert(stdout_ctx_idx == index);
-  assert(stderr_ctx_idx == index);
-  assert(stdout_ctx_elem->orig_fd == elem.stdout_ctx.orig_fd);
-  assert(stderr_ctx_elem->orig_fd == elem.stderr_ctx.orig_fd);
-  assert(stdout_ctx_elem->orig_fd == fds[stdout_ctx_idx].stdout_ctx.orig_fd);
-  assert(stderr_ctx_elem->orig_fd == fds[stderr_ctx_idx].stderr_ctx.orig_fd);
-#endif
+read_buf_ctx* read_multi_stream::lookup_mutable_read_buf_ctx(int fd) const {
+  auto search = fd_map.find(fd);
+  if (search != fd_map.end()) {
+    auto const &sp_entry = search->second;
+    if (sp_entry->get_stdout_fd() == fd) {
+      return &sp_entry->stdout_ctx;
+    }
+    if (sp_entry->get_stderr_fd() == fd) {
+      return &sp_entry->stderr_ctx;
+    }
+  }
+  return nullptr;
 }
 
-void read_multi_stream::verify_added_elem(size_t index, const read_buf_ctx_pair &elem,
+void read_multi_stream::verify_added_elem(const read_buf_ctx_pair &elem,
                                           int stdout_fd, int stderr_fd, u_int read_buf_size)
 {
 #if DBG_VERIFY
-  assert(&fds.at(fds.size() - 1) == &elem);
+  assert(&fd_map.at(stdout_fd)->stdout_ctx == &elem.stdout_ctx);
+  assert(&fd_map.at(stderr_fd)->stderr_ctx == &elem.stderr_ctx);
   assert(elem.stdout_ctx.orig_fd == stdout_fd);
   assert(elem.stdout_ctx.read_buf_limit == (read_buf_size - 1));
   assert(elem.stderr_ctx.orig_fd == stderr_fd);
@@ -66,54 +60,42 @@ void read_multi_stream::verify_added_elem(size_t index, const read_buf_ctx_pair 
 #endif
 }
 
+void read_multi_stream::add_entry_to_map(int stdout_fd, int stderr_fd, u_int read_buf_size) {
+  auto sp_shared_item = std::make_shared<read_buf_ctx_pair>(stdout_fd, stderr_fd, read_buf_size);
+  fd_map.insert(std::make_pair(stdout_fd, sp_shared_item));
+  fd_map.insert(std::make_pair(stderr_fd, sp_shared_item));
+  auto &elem = *sp_shared_item.get();
+  elem.stderr_ctx.is_stderr_flag = true;
+#if DBG_VERIFY
+  verify_added_elem(elem, stdout_fd, stderr_fd, read_buf_size);
+#endif
+
+}
+
 read_multi_stream::read_multi_stream(int const stdout_fd, int const stderr_fd, u_int const read_buf_size)
     : read_buf_size(read_buf_size)
 {
-  fds.reserve(initial_fds_vec_capacity);
-  fds.emplace_back(stdout_fd, stderr_fd, read_buf_size);
-  auto const index = fds.size() - 1;
-  auto &elem = fds.back();
-  elem.stderr_ctx.is_stderr_flag = true;
-  add_to_fd_map(index, elem);
-#if DBG_VERIFY
-  verify_added_elem(index, elem, stdout_fd, stderr_fd, read_buf_size);
-#endif
+  add_entry_to_map(stdout_fd, stderr_fd, read_buf_size);
 }
 
 read_multi_stream::read_multi_stream(std::tuple<int, int> fd_pair, u_int const read_buf_size)
     : read_buf_size(read_buf_size)
 {
-  fds.reserve(initial_fds_vec_capacity);
   int const stdout_fd = std::get<0>(fd_pair);
   int const stderr_fd = std::get<1>(fd_pair);
-  fds.emplace_back(stdout_fd, stderr_fd, read_buf_size);
-  auto const index = fds.size() - 1;
-  auto &elem = fds.back();
-  elem.stderr_ctx.is_stderr_flag = true;
-  add_to_fd_map(index, elem);
-#if DBG_VERIFY
-  verify_added_elem(index, elem, stdout_fd, stderr_fd, read_buf_size);
-#endif
+  add_entry_to_map(stdout_fd, stderr_fd, read_buf_size);
 }
 
 read_multi_stream::read_multi_stream(std::initializer_list<std::tuple<int, int>> init, u_int const read_buf_size)
     : read_buf_size(read_buf_size)
 {
-  fds.reserve(initial_fds_vec_capacity);
   for(auto const &fd_pair : init) {
     int const stdout_fd = std::get<0>(fd_pair);
     int const stderr_fd = std::get<1>(fd_pair);
 
     fprintf(stderr, "DEBUG: stdout_fd: %d, stderr_fd: %d\n", stdout_fd, stderr_fd);
 
-    fds.emplace_back(stdout_fd, stderr_fd, read_buf_size);
-    auto const index = fds.size() - 1;
-    auto &elem = fds.back();
-    elem.stderr_ctx.is_stderr_flag = true;
-    add_to_fd_map(index, elem);
-#if DBG_VERIFY
-    verify_added_elem(index, elem, stdout_fd, stderr_fd, read_buf_size);
-#endif
+    add_entry_to_map(stdout_fd, stderr_fd, read_buf_size);
   }
   fprintf(stderr, "DEBUG: read_buf_size: %u\n", read_buf_size);
 }
@@ -124,14 +106,7 @@ read_multi_stream& read_multi_stream::operator +=(std::tuple<int, int> fd_pair) 
 
   fprintf(stderr, "DEBUG: stdout_fd: %d, stderr_fd: %d\n", stdout_fd, stderr_fd);
 
-  fds.emplace_back(stdout_fd, stderr_fd, read_buf_size);
-  auto const index = fds.size() - 1;
-  auto &elem = fds.back();
-  elem.stderr_ctx.is_stderr_flag = true;
-  add_to_fd_map(index, elem);
-#if DBG_VERIFY
-  verify_added_elem(index, elem, stdout_fd, stderr_fd, read_buf_size);
-#endif
+  add_entry_to_map(stdout_fd, stderr_fd, read_buf_size);
 
   return *this;
 }
@@ -146,11 +121,8 @@ int read_multi_stream::wait_for_io(std::vector<int> &active_fds) {
   struct timeval tv{5, 0}; // Wait up to five seconds
 
   FD_ZERO(&rfd_set);
-  for(auto const & item : this->fds) {
-    auto const &rbc_stdout = item.stdout_ctx;
-    auto const &rbc_stderr = item.stderr_ctx;
-    FD_SET(rbc_stdout.orig_fd, &rfd_set); // select on the original file descriptor
-    FD_SET(rbc_stderr.orig_fd, &rfd_set); // select on the original file descriptor
+  for(auto const &kv : fd_map) {
+    FD_SET(kv.first, &rfd_set); // select on the original file descriptor
   }
 
   int highest_fd = -1;
@@ -177,15 +149,9 @@ int read_multi_stream::wait_for_io(std::vector<int> &active_fds) {
     if (ret_val > 0) {
       active_fds.clear();
       bool any_ready = false;
-      for(auto const & item : this->fds) {
-        auto const &rbc_stdout = item.stdout_ctx;
-        auto const &rbc_stderr = item.stderr_ctx;
-        if (FD_ISSET(rbc_stdout.orig_fd, &rfd_set)) {
-          active_fds.push_back(rbc_stdout.orig_fd);
-          any_ready = true;
-        }
-        if (FD_ISSET(rbc_stderr.orig_fd, &rfd_set)) {
-          active_fds.push_back(rbc_stderr.orig_fd);
+      for(auto const &kv : fd_map) {
+        if (FD_ISSET(kv.first, &rfd_set)) {
+          active_fds.push_back(kv.first);
           any_ready = true;
         }
       }
@@ -213,11 +179,19 @@ void test() {
   read_multi_stream rms({std::make_tuple(fd_1, fd_2), std::make_tuple(fd_3, fd_4), std::make_tuple(fd_5, fd_6)}, 512);
   rms += std::make_tuple(fd_7, fd_8);
 
+  std::unordered_map<int, const read_buf_ctx*> seen{};
   int count = 0;
-  for(auto const & item : rms.fds) {
+  for(auto const &kv : rms.fd_map) {
     count++;
-    auto const &rbc_stdout = item.stdout_ctx;
-    auto const &rbc_stderr = item.stderr_ctx;
+    auto const &rbc_stdout = kv.second->stdout_ctx;
+    auto const &rbc_stderr = kv.second->stderr_ctx;
+    auto search1 = seen.find(rbc_stdout.orig_fd);
+    if (search1 != seen.end()) continue;
+    seen.insert(std::make_pair(rbc_stdout.orig_fd, &rbc_stdout));
+    auto search2 = seen.find(rbc_stderr.orig_fd);
+    if (search2 == seen.end()) {
+      seen.insert(std::make_pair(rbc_stderr.orig_fd, &rbc_stderr));
+    }
     fprintf(stderr,
             "DEBUG: this: %p, stdout_fd: %03d, dup: %03d, read_buffer: %p\n"
             "       this: %p, stderr_fd: %03d, dup: %03d, read_buffer: %p\n",

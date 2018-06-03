@@ -21,7 +21,6 @@ limitations under the License.
 #include <unistd.h>
 #include <cxxabi.h>
 #include <set>
-#include <cassert>
 #include <map>
 #include <future>
 #include "signal-handling.h"
@@ -30,7 +29,10 @@ limitations under the License.
 #include "read-multi-strm.h"
 
 using write_result = std::tuple<int, int, std::string>;
-static write_result write_to_output_stream(int fd, read_buf_ctx &rbc, FILE* output_stream, std::string &str_buf);
+
+static write_result
+write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *output_stream, long &input_line, std::string &str_buf);
+
 //static void do_on_exit();
 
 using file_stream_unique_ptr = std::unique_ptr<FILE, std::function<decltype(fclose)>>;
@@ -55,6 +57,8 @@ struct output_streams {
   file_stream_unique_ptr output_err_stream;
   std::string output_str_buf{};
   std::string output_err_str_buf{};
+  long output_stream_line{0};
+  long output_err_stream_line{0};
 
   // the only valid way to construct this object
   output_streams(std::basic_string<char> &&output_file_param,
@@ -186,7 +190,8 @@ int main(int argc, char **argv) {
     std::vector<std::future<write_result>> futures{};
     std::string msg{"failure"};
     int rc;
-    while((rc = rms.wait_for_io(fds)) == 0 && !output_streams_map.empty()) {
+
+    while ((rc = rms.wait_for_io(fds)) == 0 && !output_streams_map.empty() && !signal_handling::interrupted()) {
       futures.clear();
       for(auto const fd : fds) {
         auto &rbc = rms.get_read_buf_ctx(fd);
@@ -202,24 +207,31 @@ int main(int argc, char **argv) {
           auto search = output_streams_map.find(fd);
           if (search == output_streams_map.end()) {
             fputs("WARN: a ready-to-read file descriptor failed to dereference an output context - skipping\n", stderr);
+            /* TODO: arriving here is due to an eof stream not having been
+             * removed from read_multi_stream (see other TO-DO comment below)
+             */
             continue;
           }
           auto const sp_output_ctx = search->second;
           futures.emplace_back(
-              std::async(
-                  [fd, &rbc, sp_output_ctx] {
-                    auto const output_stream = rbc.is_stderr_stream() ? sp_output_ctx->output_err_stream.get()
-                                                                      : sp_output_ctx->output_stream.get();
-                    std::string &str_buf = rbc.is_stderr_stream() ? sp_output_ctx->output_str_buf
-                                                                  : sp_output_ctx->output_err_str_buf;
-                    return write_to_output_stream(fd, rbc, output_stream, str_buf);
-                  } ));
+              std::async(std::launch::async,
+                         [fd, &rbc, sp_output_ctx] {
+                           auto const output_stream = rbc.is_stderr_stream() ? sp_output_ctx->output_err_stream.get()
+                                                                             : sp_output_ctx->output_stream.get();
+                           std::string &str_buf = rbc.is_stderr_stream() ? sp_output_ctx->output_str_buf
+                                                                         : sp_output_ctx->output_err_str_buf;
+                           long &input_line = rbc.is_stderr_stream() ? sp_output_ctx->output_err_stream_line
+                                                                     : sp_output_ctx->output_stream_line;
+                           return write_to_output_stream(fd, rbc, output_stream, input_line, str_buf);
+                         }));
         } else {
           fputs("ERROR: initialization failure of read_buf_ctx object", stderr);
           rc = EXIT_FAILURE;
-          break;
+          goto check_any_futures;
         }
       }
+      // obtain results from all the async futures
+      check_any_futures:
       for(auto &fut : futures) {
         auto rtn = fut.get();
         auto fd = std::get<0>(rtn);
@@ -227,7 +239,11 @@ int main(int argc, char **argv) {
         if (rc != EXIT_SUCCESS) {
           msg = std::move(std::get<2>(rtn));
           // removed dereference key for output context per this file descriptor
-          output_streams_map.erase(fd); // TODO: need to come up with way to detect eof
+          output_streams_map.erase(fd);
+          /* TODO: need to remove from read_multi_stream too, but need to change
+           * its implementation to where uses a map and shared pointer to context
+           * data structure instead of a vector to retain them in
+          */
         }
       }
     }
@@ -240,7 +256,8 @@ int main(int argc, char **argv) {
   return EXIT_SUCCESS;
 }
 
-static write_result write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *const output_stream, std::string &str_buf) {
+static write_result
+write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *const output_stream, long &input_line, std::string &str_buf) {
   const char* msg = "";
 
   auto const check_output_io = [&msg](int rc) -> bool {
@@ -252,17 +269,17 @@ static write_result write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *cons
     return true;
   };
 
-  int rc = 0, rc2 = 0;
-  for(long input_line = 1; !signal_handling::interrupted(); input_line++) {
+  bool is_eintr;
+  int rc;
+
+  while (!(is_eintr = signal_handling::interrupted())) {
+    input_line++;
     fprintf(stderr, "DEBUG: string buffer capacity: %lu, string length: %lu\nDEBUG: read line (%05lu) of input:\n",
             str_buf.capacity(), str_buf.length(), input_line);
     str_buf.clear();
-    rc = rbc.read_line_on_ready(str_buf);
-    if (rc != EXIT_SUCCESS || strcasecmp(str_buf.c_str(), "quit") == 0) {
+    rc = rbc.read_line(str_buf);
+    if (rc != EXIT_SUCCESS) {
       switch(rc) {
-        case EXIT_SUCCESS:
-          msg = "successful";
-          break;
         case EXIT_FAILURE:
           msg = "failure";
           break;
@@ -277,16 +294,14 @@ static write_result write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *cons
           msg = "";
       }
       if (!str_buf.empty()) {
-        rc2 = fputs(str_buf.c_str(), output_stream);
+        auto rc2 = fputs(str_buf.c_str(), output_stream);
         if (check_output_io(rc2)) {
-          rc2 = fputc('\n', output_stream);
-          if (check_output_io(rc2)) {
-            rc2 = fflush(output_stream);
-          }
+          rc2 = fflush(output_stream);
+          check_output_io(rc2);
         }
-      }
-      if (rc != EXIT_SUCCESS && rc != EOF && rc2 != -1) {
-        rc = EXIT_FAILURE;
+        if (rc == EOF && rc2 == -1) {
+          rc = EXIT_FAILURE;
+        }
       }
       return std::make_tuple(fd, rc, msg);
     }
@@ -295,12 +310,17 @@ static write_result write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *cons
       rc = fputc('\n', output_stream);
       check_output_io(rc);
     }
-    if (rc == -1) return std::make_tuple(fd, EXIT_FAILURE, msg);
+    if (rc == -1) {
+      return std::make_tuple(fd, EXIT_FAILURE, msg);
+    }
+    break;
   }
   rc = fflush(output_stream);
-  check_output_io(rc);
-  fputs("DEBUG: breaking out of read-line input loop due to interrupt signal\n", stderr);
-  return std::make_tuple(fd, rc != -1 ? EXIT_SUCCESS : EXIT_FAILURE, msg);
+  rc = check_output_io(rc) ? EXIT_SUCCESS : EXIT_FAILURE;
+  if (is_eintr) {
+    fputs("DEBUG: breaking out of read-line input loop due to interrupt signal\n", stderr);
+  }
+  return std::make_tuple(fd, rc, msg);
 }
 
 /*

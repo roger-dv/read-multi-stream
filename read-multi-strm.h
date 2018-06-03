@@ -24,6 +24,7 @@ limitations under the License.
 #include <tuple>
 #include <vector>
 #include <unordered_map>
+#include <cassert>
 #include "read-buf-ctx.h"
 
 

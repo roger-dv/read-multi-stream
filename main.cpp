@@ -82,8 +82,10 @@ using WR = enum class WRITE_RESULT : char {
 
 using read_multi_result = std::tuple<int, WRITE_RESULT>;
 
+using output_streams_context_map_t = std::map<int, std::shared_ptr<output_stream_context>>;
+
 static read_multi_result read_on_ready(bool &is_ctrl_z_registered, read_multi_stream &rms,
-                                       std::map<int, std::shared_ptr<output_stream_context>> &output_streams_map);
+                                       output_streams_context_map_t &output_streams_map);
 
 using write_result = std::tuple<int, int, WRITE_RESULT>;
 
@@ -109,8 +111,6 @@ static const char *write_result_str(WRITE_RESULT rslt) {
 }
 
 int main(int argc, char **argv) {
-  int rc = EXIT_SUCCESS;
-
   try {
     signal_handling::set_signals_handler();
 
@@ -132,7 +132,7 @@ int main(int argc, char **argv) {
     // a given input file are used as keys to this map. The map can be
     // dereferenced via a file descriptor (when it is ready to be read)
     // and the output files context retrieved
-    std::map<int, std::shared_ptr<output_stream_context>> output_streams_map;
+    output_streams_context_map_t output_streams_map;
 
     if (argc > 1) {
       for(int i = 1; i < argc; i++) {
@@ -220,29 +220,28 @@ int main(int argc, char **argv) {
     bool is_ctrl_z_registered = false;
 
     auto const rslt = read_on_ready(is_ctrl_z_registered, rms, output_streams_map);
-    rc = std::get<0>(rslt);
+    auto const ec = std::get<0>(rslt);
     auto const wr = std::get<1>(rslt);
     const std::string msg{write_result_str(wr)};
 
-    rc = (rc == 0 || wr == (WR) WR::END_OF_FILE) ? EXIT_SUCCESS : EXIT_FAILURE;
+    auto const rtn = ec == 0 || wr == (WR) WR::END_OF_FILE ? EXIT_SUCCESS : EXIT_FAILURE;
 
-    fprintf(stderr, "INFO: program exiting with status: [%d] %s\n", rc, msg.c_str());
+    fprintf(stderr, "INFO: program exiting with status: [%d] %s\n", rtn, msg.c_str());
+    return rtn;
   } catch(...) {
     const auto ex_nm = get_unmangled_name(abi::__cxa_current_exception_type()->name());
     fprintf(stderr, "process %d terminating due to unhandled exception of type %s", getpid(), ex_nm.c_str());
     return EXIT_FAILURE;
   }
-
-  return rc;
 }
 
 static read_multi_result read_on_ready(bool &is_ctrl_z_registered, read_multi_stream &rms,
-                                       std::map<int, std::shared_ptr<output_stream_context>> &output_streams_map)
+                                       output_streams_context_map_t &output_streams_map)
 {
   std::vector<int> fds{};
   std::vector<std::future<write_result>> futures{};
   WRITE_RESULT wr{(WR) WR::FAILURE};
-  int rc;
+  int rc{0};
 
   while (rms.size() > 0 && !signal_handling::interrupted() && (rc = rms.wait_for_io(fds)) == 0) {
     futures.clear();

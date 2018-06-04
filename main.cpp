@@ -337,6 +337,7 @@ write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *const output_stream, lon
     str_buf.clear();
     rc = rbc.read_line(str_buf);
     if (rc != EXIT_SUCCESS) {
+      const char* nl = nullptr;
       switch(rc) {
         case EXIT_FAILURE:
           wr = (WR) WR::FAILURE;
@@ -347,12 +348,13 @@ write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *const output_stream, lon
           continue;
         case EOF:
           wr = (WR) WR::END_OF_FILE;
+          nl = "\n";
           break;
         default:
           wr = (WR) WR::NO_OP;
       }
       if (!str_buf.empty()) {
-        auto rc2 = writer(output_stream, str_buf.c_str(), nullptr); // write to output whatever is in string buffer
+        auto rc2 = writer(output_stream, str_buf.c_str(), nl); // write to output whatever is in string buffer
         if (check_output_io(rc2)) {
           rc2 = fflush(output_stream); // flushing output because reached end-of-file, was interrupted, or input failure
           check_output_io(rc2);

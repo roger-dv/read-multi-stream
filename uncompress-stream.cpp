@@ -118,9 +118,9 @@ std::tuple<int, int> get_uncompressed_stream(const char * const filepath) {
   fprintf(stderr, "DEBUG: parent process pid(%d) -> reading stdout fd from: %d and stderr fd from: %d : \"%s\"\n",
           getpid(), fd_stdout, fd_stderr, filepath);
 
-  stdout_pipes[PIPES::READ] = stdout_pipes[PIPES::WRITE] -1;
+  stdout_pipes[PIPES::READ] = stdout_pipes[PIPES::WRITE] = -1;
   sp_stdout_pipes.release();
-  stderr_pipes[PIPES::READ] = stderr_pipes[PIPES::WRITE] -1;
+  stderr_pipes[PIPES::READ] = stderr_pipes[PIPES::WRITE] = -1;
   sp_stderr_pipes.release();
 
   return std::tuple<int, int>{fd_stdout, fd_stderr};

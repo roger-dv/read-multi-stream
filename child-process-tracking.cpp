@@ -109,7 +109,7 @@ static void track_child_process_completion() {
   std::thread waitid_on_forked_children_thrd{
       std::function<void()>([sf] {
         sf.wait(); // Waits for calling thread to send notification to proceed
-        waitid_on_forked_children(std::move(child_process_completion_proc_t(child_process_completion)));
+        waitid_on_forked_children(child_process_completion);
       })};
 
   waitid_on_forked_children_thrd.detach();

@@ -19,7 +19,6 @@ limitations under the License.
 */
 #include <cstdlib>
 #include <cstring>
-#include <csignal>
 #include <unistd.h>
 #include <cassert>
 #include <fcntl.h>

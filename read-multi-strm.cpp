@@ -44,30 +44,30 @@ read_buf_ctx* read_multi_stream::lookup_mutable_read_buf_ctx(int fd) const {
 }
 
 void read_multi_stream::verify_added_elem(const read_buf_ctx_pair &elem,
-                                          int stdout_fd, int stderr_fd, u_int read_buf_size)
+                                          int stdout_fd, int stderr_fd, u_int read_buffer_size)
 {
 #if DBG_VERIFY
   assert(&fd_map.at(stdout_fd)->stdout_ctx == &elem.stdout_ctx);
   assert(&fd_map.at(stderr_fd)->stderr_ctx == &elem.stderr_ctx);
   assert(elem.stdout_ctx.orig_fd == stdout_fd);
-  assert(elem.stdout_ctx.read_buf_limit == (read_buf_size - 1));
+  assert(elem.stdout_ctx.read_buf_limit == (read_buffer_size - 1));
   assert(elem.stderr_ctx.orig_fd == stderr_fd);
-  assert(elem.stderr_ctx.read_buf_limit == (read_buf_size - 1));
+  assert(elem.stderr_ctx.read_buf_limit == (read_buffer_size - 1));
   fprintf(stderr,
           "DEBUG: added vector element read_buf_ctx_pair: %p\n"
-          "DEBUG: stdout_fd: %d, stderr_fd: %d, read_buf_size: %u\n",
-          &elem, elem.stdout_ctx.orig_fd, elem.stderr_ctx.orig_fd, read_buf_size);
+          "DEBUG: stdout_fd: %d, stderr_fd: %d, read_buffer_size: %u\n",
+          &elem, elem.stdout_ctx.orig_fd, elem.stderr_ctx.orig_fd, read_buffer_size);
 #endif
 }
 
-void read_multi_stream::add_entry_to_map(int stdout_fd, int stderr_fd, u_int read_buf_size) {
-  auto sp_shared_item = std::make_shared<read_buf_ctx_pair>(stdout_fd, stderr_fd, read_buf_size);
+void read_multi_stream::add_entry_to_map(int stdout_fd, int stderr_fd, u_int read_buffer_size) {
+  auto sp_shared_item = std::make_shared<read_buf_ctx_pair>(stdout_fd, stderr_fd, read_buffer_size);
   fd_map.insert(std::make_pair(stdout_fd, sp_shared_item));
   fd_map.insert(std::make_pair(stderr_fd, sp_shared_item));
   auto &elem = *sp_shared_item.get();
   elem.stderr_ctx.is_stderr_flag = true;
 #if DBG_VERIFY
-  verify_added_elem(elem, stdout_fd, stderr_fd, read_buf_size);
+  verify_added_elem(elem, stdout_fd, stderr_fd, read_buffer_size);
 #endif
 
 }

@@ -41,7 +41,7 @@ int get_file_desc(FILE *stream, const int line_nbr) {
   return fd;
 }
 
-bool valid_file(const char * filepath) {
+bool valid_file(const char * /*filepath*/) {
   return true;
 }
 

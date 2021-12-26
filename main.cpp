@@ -252,7 +252,7 @@ static read_multi_result read_on_ready(bool &is_ctrl_z_registered, read_multi_st
       if (prbc->is_valid_init()) {
         if (!is_ctrl_z_registered) { // a one-time-only initialization
           const auto curr_thrd = pthread_self();
-          signal_handling::register_ctrl_z_handler([curr_thrd](int sig) {
+          signal_handling::register_ctrl_z_handler([curr_thrd](int sig) -> void {
 //            fprintf(stderr, "DEBUG: << %s(sig: %d)\n", "signal_interrupt_thread", sig);
             pthread_kill(curr_thrd, sig);
           });
@@ -274,7 +274,7 @@ static read_multi_result read_on_ready(bool &is_ctrl_z_registered, read_multi_st
                          // the writer callback accepts line of text and writes it to output stream;
                          // however, could do application logic processing on text line here as well
                          return write_to_output_stream(fd, *prbc, output_stream, input_line, str_buf,
-                                                       [](FILE *os, const char *str, const char *nl) {
+                                                       [](FILE *os, const char *str, const char *nl) -> int {
                                                          auto rc2 = fputs(str, os);
                                                          if (rc2 != -1 && nl != nullptr) {
                                                            rc2 = fputs(nl, os);

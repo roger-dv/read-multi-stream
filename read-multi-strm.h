@@ -79,8 +79,8 @@ public:
   bool remove(int fd) { return fd_map.erase(fd) > 0; }
 private:
   read_buf_ctx* lookup_mutable_read_buf_ctx(int fd) const;
-  void verify_added_elem(const read_buf_ctx_pair &elem, int stdout_fd, int stderr_fd, u_int read_buf_size);
-  void add_entry_to_map(int stdout_fd, int stderr_fd, u_int read_buf_size);
+  void verify_added_elem(const read_buf_ctx_pair &elem, int stdout_fd, int stderr_fd, u_int read_buffer_size);
+  void add_entry_to_map(int stdout_fd, int stderr_fd, u_int read_buffer_size);
 };
 
 #endif //READ_MULTI_STRM_H

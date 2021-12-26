@@ -37,7 +37,7 @@ private:
   bool eof_flag = false;
   bool is_stderr_flag = false;
   friend void test();
-  friend class read_buf_ctx_pair;
+  friend struct read_buf_ctx_pair;
   friend class read_multi_stream;
 public:
   read_buf_ctx() = delete;

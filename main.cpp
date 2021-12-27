@@ -95,8 +95,8 @@ static write_result
 write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *output_stream, long &input_line, std::string &str_buf,
                        const write_to_output_callback &writer);
 
-static const char *write_result_str(WRITE_RESULT rslt) {
-  switch (rslt) {
+static const char *write_result_str(WRITE_RESULT result) {
+  switch (result) {
     case (WR) WR::SUCCESS:
       return "success";
     case (WR) WR::FAILURE:
@@ -129,9 +129,9 @@ int main(int argc, char **argv) {
     read_multi_stream rms;
 
     // file descriptors to the output (stdout and stderr) of processing
-    // a given input file are used as keys to this map. The map can be
-    // dereferenced via a file descriptor (when it is ready to be read)
-    // and the output files context retrieved
+    // a given input file are used as keys to this map. Can dereference
+    // the map via a file descriptor (when it is ready to be read) and
+    // the output files context retrieved
     output_streams_context_map_t output_streams_map;
 
     if (argc > 1) {
@@ -219,9 +219,9 @@ int main(int argc, char **argv) {
 
     bool is_ctrl_z_registered = false;
 
-    auto const rslt = read_on_ready(is_ctrl_z_registered, rms, output_streams_map);
-    auto const ec = std::get<0>(rslt);
-    auto const wr = std::get<1>(rslt);
+    auto const result = read_on_ready(is_ctrl_z_registered, rms, output_streams_map);
+    auto const ec = std::get<0>(result);
+    auto const wr = std::get<1>(result);
     const std::string msg{write_result_str(wr)};
 
     auto const rtn = ec == 0 || wr == (WR) WR::END_OF_FILE ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -238,23 +238,24 @@ int main(int argc, char **argv) {
 static read_multi_result read_on_ready(bool &is_ctrl_z_registered, read_multi_stream &rms,
                                        output_streams_context_map_t &output_streams_map)
 {
-  std::vector<int> fds{};
+  std::vector<pollfd_result> fds{};
   std::vector<std::future<write_result>> futures{};
   WRITE_RESULT wr{(WR) WR::FAILURE};
   int rc{0};
 
-  while (rms.size() > 0 && !signal_handling::interrupted() && (rc = rms.wait_for_io(fds)) == 0) {
+  while (rms.size() > 0 && !signal_handling::interrupted() && ((rc = rms.poll_for_io(fds)) == 0 || rc == EINTR)) {
     futures.clear();
-    for(auto const fd : fds) {
+    for(const auto& pollfd : fds) {
+      const auto fd = pollfd.fd;
       auto const prbc = rms.get_mutable_read_buf_ctx(fd);
-      assert(prbc != nullptr); // lookup should never derefence to a null pointer
+      assert(prbc != nullptr); // lookup should never dereference to a null pointer
       if (prbc == nullptr) continue;
       if (prbc->is_valid_init()) {
         if (!is_ctrl_z_registered) { // a one-time-only initialization
-          const auto curr_thrd = pthread_self();
-          signal_handling::register_ctrl_z_handler([curr_thrd](int sig) -> void {
+          const auto curr_thread = pthread_self();
+          signal_handling::register_ctrl_z_handler([curr_thread](int sig) -> void {
 //            fprintf(stderr, "DEBUG: << %s(sig: %d)\n", "signal_interrupt_thread", sig);
-            pthread_kill(curr_thrd, sig);
+            pthread_kill(curr_thread, sig);
           });
           is_ctrl_z_registered = true;
         }

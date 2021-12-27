@@ -52,6 +52,12 @@ struct read_buf_ctx_pair {
   int get_stderr_fd() { return stderr_ctx.orig_fd; }
 };
 
+/* Data structure describing a polling request result  */
+struct pollfd_result {
+  int fd;			        /* File descriptor to poll. */
+  short int revents;  /* Types of events that actually occurred. */
+};
+
 class read_multi_stream final {
   std::unordered_map<int, std::shared_ptr<read_buf_ctx_pair>> fd_map;
   u_int const read_buf_size{0};
@@ -72,7 +78,7 @@ public:
     return *this;
   }
   ~read_multi_stream();
-  int wait_for_io(std::vector<int> &active_fds);
+  int poll_for_io(std::vector<pollfd_result> &active_fds);
   size_t size() const { return fd_map.size(); }
   read_buf_ctx* get_mutable_read_buf_ctx(int fd) { return lookup_mutable_read_buf_ctx(fd); }
   const read_buf_ctx* get_read_buf_ctx(int fd) const { return lookup_mutable_read_buf_ctx(fd); }

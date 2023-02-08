@@ -2,7 +2,8 @@
 
 Copyright 2018 Roger D. Voss
 
-Created by roger-dv on 4/21/18.
+Created  by roger-dv on 04/21/2018.
+Modified by roger-dv on 02/07/2023.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,7 +28,7 @@ limitations under the License.
 #include "child-process-tracking.h"
 #include "uncompress-stream.h"
 
-std::tuple<int, int> get_uncompressed_stream(const char * const filepath) {
+std::tuple<int, int> get_uncompressed_stream(std::string_view filepath) {
   enum PIPES : short { READ = 0, WRITE = 1 };
 
   int stdout_pipes[2] { -1, -1 };
@@ -99,7 +100,7 @@ std::tuple<int, int> get_uncompressed_stream(const char * const filepath) {
     // invoke the gzip program
     static const char gzip[] = "gzip";
     fprintf(stderr, "DEBUG: child process pid(%d) -> writing fd: %d; exec of: '%s -dc %s'\n",
-            getpid(), stdout_fd, gzip, filepath);
+            getpid(), stdout_fd, gzip, filepath.data());
     execlp(gzip, gzip, "-dc", filepath, static_cast<char*>(nullptr)); line_nbr = __LINE__;
 
     // only executes following statements if the execlp() call fatally failed
@@ -116,7 +117,7 @@ std::tuple<int, int> get_uncompressed_stream(const char * const filepath) {
   start_tracking_child_process(pid /*child pid */, stdout_pipes[PIPES::WRITE], stderr_pipes[PIPES::WRITE]);
 
   fprintf(stderr, "DEBUG: parent process pid(%d) -> reading stdout fd from: %d and stderr fd from: %d : \"%s\"\n",
-          getpid(), fd_stdout, fd_stderr, filepath);
+          getpid(), fd_stdout, fd_stderr, filepath.data());
 
   stdout_pipes[PIPES::READ] = stdout_pipes[PIPES::WRITE] = -1;
   sp_stdout_pipes.release();

@@ -2,7 +2,8 @@
 
 Copyright 2018 Roger D. Voss
 
-Created by roger-dv on 4/21/18.
+Created  by roger-dv on 04/21/2018.
+Modified by roger-dv on 02/07/2023.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,6 +21,8 @@ limitations under the License.
 #ifndef UNCOMPRESS_STREAM_H
 #define UNCOMPRESS_STREAM_H
 
-std::tuple<int, int> get_uncompressed_stream(const char *filepath);
+#include <string_view>
+
+std::tuple<int, int> get_uncompressed_stream(std::string_view filepath);
 
 #endif //UNCOMPRESS_STREAM_H

@@ -2,7 +2,8 @@
 
 Copyright 2018 Roger D. Voss
 
-Created by roger-dv on 4/21/18.
+Created  by roger-dv on 04/21/2018.
+Modified by roger-dv on 02/07/2023.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -125,7 +126,11 @@ read_multi_stream::~read_multi_stream() {
 
 int read_multi_stream::poll_for_io(std::vector<pollfd_result> &active_fds) {
   active_fds.clear();
-  const int time_out = 3 * 1000; // milliseconds
+  const struct timespec timeout_ts{ 3, 0 };
+  sigset_t sigset;
+  sigemptyset(&sigset);
+  sigaddset(&sigset, SIGINT);
+  sigaddset(&sigset, SIGTERM);
 
   // stack-allocate array of struct pollfd and zero initialize its memory space
   const auto fds_count = fd_map.size();
@@ -153,20 +158,20 @@ int read_multi_stream::poll_for_io(std::vector<pollfd_result> &active_fds) {
   while(!signal_handling::interrupted()) {
     /* Watch input streams to see when have input. */
     int line_nbr = __LINE__ + 1;
-    auto ret_val = poll(pollfd_array, fds_count, time_out);
+    auto ret_val = ppoll(pollfd_array, fds_count, &timeout_ts, &sigset);
     if (ret_val == -1) {
       const auto ec = errno;
       if (ec == EINTR) {
         return ec; // signal interruption detected so bail out immediately
       }
-      fprintf(stderr, "ERROR: %d: %s() -> poll(): %s\n", line_nbr, __FUNCTION__, strerror(ec));
+      fprintf(stderr, "ERROR: %d: %s() -> ppoll(): %s\n", line_nbr, __FUNCTION__, strerror(ec));
       return -1;
     }
 
     if (ret_val > 0) {
       bool any_ready = false;
       for(i = 0; i < fds_count; i++) {
-        auto &rfd = pollfd_array[i];
+        const auto &rfd = pollfd_array[i];
         if (rfd.revents != 0) {
           active_fds.push_back({.fd = rfd.fd, .revents = rfd.revents});
           any_ready = true;

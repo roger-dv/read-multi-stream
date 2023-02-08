@@ -2,7 +2,8 @@
 
 Copyright 2018 Roger D. Voss
 
-Created by roger-dv on 4/12/18.
+Created  by roger-dv on 04/12/2018.
+Modified by roger-dv on 02/07/2023.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,6 +18,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 */
+#include <string_view>
 #include <cstring>
 #include <unistd.h>
 #include <cxxabi.h>
@@ -71,11 +73,6 @@ struct output_stream_context {
   ~output_stream_context() = default;
 };
 
-/**
- * NOTE: Casting of enums on assignments and switch statements necessary for
- * working around bug in CLion code inspections where incorrectly complains
- * about taking enum type from integer. (Bug should be fixed in CLion 2018.1)
- */
 using WR = enum class WRITE_RESULT : char {
   NO_OP = 0, SUCCESS, FAILURE, INTERRUPTED, END_OF_FILE
 };
@@ -89,7 +86,7 @@ static read_multi_result read_on_ready(bool &is_ctrl_z_registered, read_multi_st
 
 using write_result = std::tuple<int, int, WRITE_RESULT>;
 
-using write_to_output_callback = std::function<int(FILE *, const char *, const char *)>;
+using write_to_output_callback = std::function<int(FILE *, std::string_view, std::string_view)>;
 
 static write_result
 write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *output_stream, long &input_line, std::string &str_buf,
@@ -97,13 +94,13 @@ write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *output_stream, long &inp
 
 static const char *write_result_str(WRITE_RESULT result) {
   switch (result) {
-    case (WR) WR::SUCCESS:
+    case WR::SUCCESS:
       return "success";
-    case (WR) WR::FAILURE:
+    case WR::FAILURE:
       return "failure";
-    case (WR) WR::INTERRUPTED:
+    case WR::INTERRUPTED:
       return "thread interrupted";
-    case (WR) WR::END_OF_FILE:
+    case WR::END_OF_FILE:
       return "end of input stream";
     default:
       return "";
@@ -136,11 +133,11 @@ int main(int argc, char **argv) {
 
     if (argc > 1) {
       for(int i = 1; i < argc; i++) {
-        const char * const arg = argv[i];
-        fprintf(stderr, "DEBUG: arg: \"%s\"\n", arg);
+        std::string_view arg{argv[i]};
+        fprintf(stderr, "DEBUG: arg: \"%s\"\n", arg.data());
         switch(arg[0]) {
           case '-': {
-            if (strcasecmp(arg, "-bufsize") == 0) {
+            if (arg.compare("-bufsize") == 0) {
               if (++i < argc) {
                 const char * const nbr_str = argv[i];
                 try {
@@ -156,11 +153,11 @@ int main(int argc, char **argv) {
                   fprintf(stderr, "WARN: '%s' was out of range as a positive integer expressing read buffer size\n", nbr_str);
                 }
               } else {
-                fprintf(stderr, "ERROR: expected numeric value following command option '%s'\n", arg);
+                fprintf(stderr, "ERROR: expected numeric value following command option '%s'\n", arg.data());
                 return EXIT_FAILURE;
               }
             } else {
-              fprintf(stderr, "ERROR: unknown command option '%s'\n", arg);
+              fprintf(stderr, "ERROR: unknown command option '%s'\n", arg.data());
               return EXIT_FAILURE;
             } 
             break;
@@ -168,7 +165,7 @@ int main(int argc, char **argv) {
           default: { // assume argument is a file path
             if (valid_file(arg)) {
               int offset;
-              const std::string input_file{arg};
+              std::string_view input_file{arg};
               if (has_ending(input_file, ".gz", offset, __LINE__)) {
                 auto const fd_pair = get_uncompressed_stream(arg);
                 auto const fd_stdout = std::get<0>(fd_pair);
@@ -224,7 +221,7 @@ int main(int argc, char **argv) {
     auto const wr = std::get<1>(result);
     const std::string msg{write_result_str(wr)};
 
-    auto const rtn = ec == 0 || wr == (WR) WR::END_OF_FILE ? EXIT_SUCCESS : EXIT_FAILURE;
+    auto const rtn = ec == 0 || wr == WR::END_OF_FILE ? EXIT_SUCCESS : EXIT_FAILURE;
 
     fprintf(stderr, "INFO: program exiting with status: [%d] %s\n", rtn, msg.c_str());
     return rtn;
@@ -240,11 +237,12 @@ static read_multi_result read_on_ready(bool &is_ctrl_z_registered, read_multi_st
 {
   std::vector<pollfd_result> fds{};
   std::vector<std::future<write_result>> futures{};
-  WRITE_RESULT wr{(WR) WR::FAILURE};
+  WRITE_RESULT wr{WR::FAILURE};
   int rc{0};
 
   while (rms.size() > 0 && !signal_handling::interrupted() && ((rc = rms.poll_for_io(fds)) == 0 || rc == EINTR)) {
     futures.clear();
+    futures.reserve(fds.size());
     for(const auto& pollfd : fds) {
       const auto fd = pollfd.fd;
       auto const prbc = rms.get_mutable_read_buf_ctx(fd);
@@ -265,24 +263,23 @@ static read_multi_result read_on_ready(bool &is_ctrl_z_registered, read_multi_st
           continue;
         }
         auto output_stream_ctx = search->second;
-        // invoke the write to the output stream context in an asynchronous manner, using a future to get the outcome
-        futures.emplace_back(
-            std::async(std::launch::async,
-                       [fd, prbc, output_stream_ctx] {
-                         auto const output_stream = output_stream_ctx->output_stream.get();
-                         auto &input_line = output_stream_ctx->output_stream_line;
-                         auto &str_buf = output_stream_ctx->output_str_buf;
-                         // the writer callback accepts line of text and writes it to output stream;
-                         // however, could do application logic processing on text line here as well
-                         return write_to_output_stream(fd, *prbc, output_stream, input_line, str_buf,
-                                                       [](FILE *os, const char *str, const char *nl) -> int {
-                                                         auto rc2 = fputs(str, os);
-                                                         if (rc2 != -1 && nl != nullptr) {
-                                                           rc2 = fputs(nl, os);
-                                                         }
-                                                         return rc2;
-                                                       });
-                       }));
+        std::function<std::tuple<int, int, WRITE_RESULT>()> write_output_task_callback = [fd, prbc, output_stream_ctx] {
+          auto const output_stream = output_stream_ctx->output_stream.get();
+          auto &input_line = output_stream_ctx->output_stream_line;
+          auto &str_buf = output_stream_ctx->output_str_buf;
+          // the writer callback accepts line of text and writes it to output stream;
+          // however, could do application logic processing on text line here as well
+          return write_to_output_stream(fd, *prbc, output_stream, input_line, str_buf,
+                                        [](FILE *os, std::string_view str, std::string_view nl) -> int {
+                                          auto rc2 = fputs(str.data(), os);
+                                          if (rc2 != -1 && !nl.empty()) {
+                                            rc2 = fputs(nl.data(), os);
+                                          }
+                                          return rc2;
+                                        });
+        };
+        // will invoke write to the output stream context in an asynchronous manner, using a future to get the outcome
+        futures.emplace_back(std::async(std::launch::async, std::move(write_output_task_callback)));
       } else {
         // A failed initialization detected for the read_buf_ctx (the input source), so remove
         // dereference key for the input and output stream context items per this file descriptor
@@ -295,35 +292,35 @@ static read_multi_result read_on_ready(bool &is_ctrl_z_registered, read_multi_st
     }
     // obtain results from all the async futures
     for(auto &fut : futures) {
-      auto rtn = fut.get();
-      auto const fd  = std::get<0>(rtn);
-      auto const rc2 = std::get<1>(rtn);
-      if (rc2 != EXIT_SUCCESS) {
-        rc = rc2;
-        wr = std::get<2>(rtn);
+      auto [rtn_fd, rtn_rc, rtn_wr] = fut.get();
+      if (rtn_rc != EXIT_SUCCESS) {
+        rc = rtn_rc;
+        wr = rtn_wr;
         // removed dereference key for output context per this file descriptor
-        rms.remove(fd);
-        output_streams_map.erase(fd);
+        rms.remove(rtn_fd);
+        output_streams_map.erase(rtn_fd);
       }
     }
   }
 
   if (rc == EXIT_SUCCESS) {
-    wr = (WR) WR::SUCCESS;
+    wr = WR::SUCCESS;
   }
   return std::make_tuple(rc, wr);
 }
 
-static write_result
-write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *const output_stream, long &input_line, std::string &str_buf,
-                       const write_to_output_callback &writer)
+static write_result write_to_output_stream(int fd, read_buf_ctx &rbc,
+                                           FILE *const output_stream,
+                                           long &input_line,
+                                           std::string &str_buf,
+                                           const write_to_output_callback &writer)
 {
-  WRITE_RESULT wr{(WR) WR::NO_OP};
+  WRITE_RESULT wr{WR::NO_OP};
 
   auto const check_output_io = [&wr](int rc) -> bool {
     if (rc == -1) {
       fprintf(stderr,"ERROR: failed writing to output stream: [%d] %s\n", rc, strerror(errno));
-      wr = (WR) WR::FAILURE;
+      wr = WR::FAILURE;
       return false;
     }
     return true;
@@ -338,24 +335,24 @@ write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *const output_stream, lon
     str_buf.clear();
     rc = rbc.read_line(str_buf);
     if (rc != EXIT_SUCCESS) {
-      const char* nl = nullptr;
+      const char* nl = "";
       switch(rc) {
         case EXIT_FAILURE:
-          wr = (WR) WR::FAILURE;
+          wr = WR::FAILURE;
           break;
         case EINTR:
-          wr = (WR) WR::INTERRUPTED;
+          wr = WR::INTERRUPTED;
           fprintf(stderr, "INFO: read-input thread interrupted; status: [%d] %s\n", rc, strerror(rc));
           continue;
         case EOF:
-          wr = (WR) WR::END_OF_FILE;
+          wr = WR::END_OF_FILE;
           nl = "\n";
           break;
         default:
-          wr = (WR) WR::NO_OP;
+          wr = WR::NO_OP;
       }
       if (!str_buf.empty()) {
-        auto rc2 = writer(output_stream, str_buf.c_str(), nl); // write to output whatever is in string buffer
+        auto rc2 = writer(output_stream, str_buf, nl); // write to output whatever is in string buffer
         if (check_output_io(rc2)) {
           rc2 = fflush(output_stream); // flushing output because reached end-of-file, was interrupted, or input failure
           check_output_io(rc2);
@@ -366,7 +363,7 @@ write_to_output_stream(int fd, read_buf_ctx &rbc, FILE *const output_stream, lon
       }
       return std::make_tuple(fd, rc, wr);
     }
-    rc = writer(output_stream, str_buf.c_str(), "\n"); // write string buffer as a line of text to output stream
+    rc = writer(output_stream, str_buf, "\n"); // write string buffer as a line of text to output stream
     if (check_output_io(rc)) {
       input_line++;
     } else {

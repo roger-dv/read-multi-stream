@@ -2,7 +2,8 @@
 
 Copyright 2018 Roger D. Voss
 
-Created by roger-dv on 4/21/18.
+Created  by roger-dv on 04/21/2018.
+Modified by roger-dv on 02/07/2023.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,10 +24,10 @@ limitations under the License.
 #include <memory>
 #include "util.h"
 
-std::string get_unmangled_name(const char * const mangled_name) {
+std::string get_unmangled_name(std::string_view mangled_name) {
   auto const free_nm = [](char *p) { std::free(p); };
   int status;
-  auto const pnm = abi::__cxa_demangle(mangled_name, nullptr, nullptr, &status);
+  auto const pnm = abi::__cxa_demangle(mangled_name.data(), nullptr, nullptr, &status);
   std::unique_ptr<char, decltype(free_nm)> nm_sp(pnm, free_nm);
   return std::string(nm_sp.get());
 }
@@ -41,11 +42,11 @@ int get_file_desc(FILE *stream, const int line_nbr) {
   return fd;
 }
 
-bool valid_file(const char * /*filepath*/) {
+bool valid_file(std::string_view /*filepath*/) {
   return true;
 }
 
-bool has_ending(const std::string &full_str, const std::string &ending, int &offset, int line_nbr) {
+bool has_ending(std::string_view full_str, std::string_view ending, int &offset, int line_nbr) {
   offset = -1;
   bool rslt = false;
   if (full_str.length() >= ending.length()) {
@@ -54,7 +55,7 @@ bool has_ending(const std::string &full_str, const std::string &ending, int &off
   }
   if (!rslt) {
     fprintf(stderr, "ERROR: %d: %s() -> \"%s\" is not a %s compressed file\n",
-            line_nbr, __FUNCTION__, full_str.c_str(), ending.c_str());
+            line_nbr, __FUNCTION__, full_str.data(), ending.data());
   }
   return rslt;
 }

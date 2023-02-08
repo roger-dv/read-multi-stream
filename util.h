@@ -2,7 +2,8 @@
 
 Copyright 2018 Roger D. Voss
 
-Created by roger-dv on 4/21/18.
+Created  by roger-dv on 04/21/2018.
+Modified by roger-dv on 02/07/2023.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,12 +22,12 @@ limitations under the License.
 #define UTIL_H
 
 #include <cstdio>
-#include <string>
+#include <string_view>
 
-std::string get_unmangled_name(const char * mangled_name);
+std::string get_unmangled_name(std::string_view mangled_name);
 int  get_file_desc(FILE *stream, int line_nbr);
-bool valid_file(const char * filepath);
-bool has_ending(const std::string &full_str, const std::string &ending, int &offset, int line_nbr);
+bool valid_file(std::string_view filepath);
+bool has_ending(std::string_view full_str, std::string_view ending, int &offset, int line_nbr);
 bool dbg_echo_input_source(int fd, int line_nbr);
 void dbg_dump_file_desc_flags(int fd);
 

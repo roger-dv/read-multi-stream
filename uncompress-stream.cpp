@@ -101,7 +101,7 @@ std::tuple<int, int> get_uncompressed_stream(std::string_view filepath) {
     static const char gzip[] = "gzip";
     fprintf(stderr, "DEBUG: child process pid(%d) -> writing fd: %d; exec of: '%s -dc %s'\n",
             getpid(), stdout_fd, gzip, filepath.data());
-    execlp(gzip, gzip, "-dc", filepath, static_cast<char*>(nullptr)); line_nbr = __LINE__;
+    execlp(gzip, gzip, "-dc", filepath.data(), static_cast<char*>(nullptr)); line_nbr = __LINE__;
 
     // only executes following statements if the execlp() call fatally failed
     fprintf(stderr, "ERROR: %d: %s() -> execlp(): %s\n", line_nbr, __FUNCTION__, strerror(errno));

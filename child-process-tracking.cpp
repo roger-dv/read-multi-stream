@@ -2,7 +2,8 @@
 
 Copyright 2018 Roger D. Voss
 
-Created by roger-dv on 4/21/18.
+Created  by roger-dv on 04/21/2018.
+Modified by roger-dv on 02/07/2023.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -51,7 +52,7 @@ static void track_child_process_completion() {
   using child_process_completion_proc_t = std::function<bool(int)>;
 
   static auto const waitid_on_forked_children = [](child_process_completion_proc_t child_process_completion_proc) {
-    bool done = false;
+    volatile bool done = false;
     siginfo_t info {0};
     do {
       if (waitid(P_ALL, 0, &info, WEXITED|WSTOPPED) == 0) {
